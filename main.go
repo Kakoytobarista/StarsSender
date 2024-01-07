@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/joho/godotenv"
 	"math/rand"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -29,17 +32,32 @@ type Repository struct {
 }
 
 func main() {
+	// Load environment variables from the .env file
+	if err := godotenv.Load(); err != nil {
+		fmt.Println("Error loading .env file:", err)
+		return
+	}
+
+	// Get GitHub token from environment variable
+	token := os.Getenv("GITHUB_TOKEN")
+
+	// Check if the token is empty
+	if token == "" {
+		fmt.Println("GitHub token is missing. Please set GITHUB_TOKEN environment variable.")
+		return
+	}
+
 	rand.Seed(time.Now().UnixNano())
 
 	// Search for repositories
-	repositories, err := searchRepositories(searchQuery, 2)
+	repositories, err := searchRepositories(searchQuery, 100)
 	if err != nil {
 		fmt.Println("Error searching repositories:", err)
 		return
 	}
 
 	for _, repo := range repositories {
-		err := starRepository("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", repo.FullName)
+		err := starRepository(token, repo.FullName)
 		if err == nil {
 			fmt.Printf("Starred repository: %s\n", repo.FullName)
 		} else {
@@ -47,6 +65,7 @@ func main() {
 		}
 	}
 }
+
 func searchRepositories(query string, count int) ([]Repository, error) {
 	languageFilter := "language:python"
 	apiURL := fmt.Sprintf("%s/search/repositories?q=%s+%s&per_page=%d&sort=stars&order=asc", baseURL, query, languageFilter, count)
@@ -92,6 +111,24 @@ func starRepository(token, fullName string) error {
 
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
+	} else if resp.StatusCode == http.StatusUnauthorized {
+		remaining := resp.Header.Get("X-RateLimit-Remaining")
+		reset := resp.Header.Get("X-RateLimit-Reset")
+
+		fmt.Printf("Rate limit exceeded. Remaining requests: %s. Reset time: %s\n", remaining, reset)
+
+		// Implement a simple backoff strategy
+		resetTime, err := strconv.ParseInt(reset, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		waitTime := time.Until(time.Unix(resetTime, 0))
+		fmt.Printf("Waiting for %s before making the next request...\n", waitTime)
+		time.Sleep(waitTime)
+
+		// Retry the request
+		return starRepository(token, fullName)
 	} else {
 		return fmt.Errorf("failed to star repository. Status Code: %d", resp.StatusCode)
 	}
